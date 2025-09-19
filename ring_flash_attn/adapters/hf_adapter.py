@@ -11,10 +11,24 @@ try:
         is_flash_attn_greater_or_equal_2_10,
     )
 except ImportError:
-    # transformers <= 4.53.x
-    from transformers.modeling_flash_attention_utils import (
-        is_flash_attn_greater_or_equal_2_10,
-    )
+    try:
+        # transformers <= 4.53.x
+        from transformers.modeling_flash_attention_utils import (
+            _flash_supports_window_size as _flash_supports_window,
+            is_flash_attn_greater_or_equal,
+        )
+    except ImportError:
+        # transformers >= 4.55.x - these functions are not available anymore
+        _flash_supports_window = True  # Assume flash attention supports window by default
+        def is_flash_attn_greater_or_equal(version):
+            # For newer versions, we can try to import and check
+            try:
+                from transformers.modeling_flash_attention_utils import is_flash_attn_greater_or_equal_2_10
+                if version == "2.4.1":
+                    return is_flash_attn_greater_or_equal_2_10()
+                return True  # Assume newer version supports most features
+            except:
+                return True
 
 from ..llama3_flash_attn_varlen import (
     llama3_flash_attn_varlen_func,
@@ -276,11 +290,91 @@ def create_ring_flash_attention_forward(
             deterministic,
         )
 
+    # transformers 4.55.0+
+    def _flash_attention_forward_v4(
+        query_states: torch.Tensor,
+        key_states: torch.Tensor,
+        value_states: torch.Tensor,
+        attention_mask: Optional[torch.Tensor],
+        query_length: int,
+        is_causal: bool,
+        dropout: float = 0.0,
+        position_ids: Optional[torch.Tensor] = None,
+        softmax_scale: Optional[float] = None,
+        sliding_window: Optional[int] = None,
+        use_top_left_mask: bool = False,
+        softcap: Optional[float] = None,
+        deterministic: Optional[bool] = None,
+        cu_seq_lens_q: Optional[torch.LongTensor] = None,
+        cu_seq_lens_k: Optional[torch.LongTensor] = None,
+        max_length_q: Optional[int] = None,
+        max_length_k: Optional[int] = None,
+        target_dtype: Optional[torch.dtype] = None,
+        implementation: Optional[str] = None,
+        **kwargs,
+    ):
+        return _flash_attention_forward(
+            query_states,
+            key_states,
+            value_states,
+            attention_mask,
+            query_length,
+            is_causal,
+            dropout,
+            position_ids,
+            softmax_scale,
+            sliding_window,
+            use_top_left_mask,
+            softcap,
+            deterministic,
+        )
+
+    # transformers 4.55.4+ (adds implementation parameter)
+    def _flash_attention_forward_v5(
+        query_states: torch.Tensor,
+        key_states: torch.Tensor,
+        value_states: torch.Tensor,
+        attention_mask: Optional[torch.Tensor],
+        query_length: int,
+        is_causal: bool,
+        dropout: float = 0.0,
+        position_ids: Optional[torch.Tensor] = None,
+        softmax_scale: Optional[float] = None,
+        sliding_window: Optional[int] = None,
+        use_top_left_mask: bool = False,
+        softcap: Optional[float] = None,
+        deterministic: Optional[bool] = None,
+        cu_seq_lens_q: Optional[torch.LongTensor] = None,
+        cu_seq_lens_k: Optional[torch.LongTensor] = None,
+        max_length_q: Optional[int] = None,
+        max_length_k: Optional[int] = None,
+        target_dtype: Optional[torch.dtype] = None,
+        implementation: Optional[str] = None,
+        **kwargs,
+    ):
+        return _flash_attention_forward(
+            query_states,
+            key_states,
+            value_states,
+            attention_mask,
+            query_length,
+            is_causal,
+            dropout,
+            position_ids,
+            softmax_scale,
+            sliding_window,
+            use_top_left_mask,
+            softcap,
+            deterministic,
+        )
+
     return [
         _flash_attention_forward,
         _flash_attention_forward_v1,
         _flash_attention_forward_v2,
         _flash_attention_forward_v3,
+        _flash_attention_forward_v4,
+        _flash_attention_forward_v5,
     ]
 
 
