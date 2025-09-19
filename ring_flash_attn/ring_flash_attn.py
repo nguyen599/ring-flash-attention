@@ -2,7 +2,19 @@ import torch
 import torch.distributed as dist
 from flash_attn.flash_attn_interface import _flash_attn_forward, _flash_attn_backward
 from .utils import RingComm, update_out_and_lse, get_default_args
+import logging
+import gc
+import flash_attn
 
+if torch.__version__ >= "2.4.0" and flash_attn.__version__ >= "2.7.0":
+    _wrapped_flash_attn_forward = torch.ops.flash_attn._flash_attn_forward
+else:
+    _wrapped_flash_attn_forward = _flash_attn_forward
+
+if torch.__version__ >= "2.4.0":
+    _wrapped_flash_attn_backward = torch.ops.flash_attn._flash_attn_backward
+else:
+    _wrapped_flash_attn_backward = _flash_attn_backward
 
 def ring_flash_attn_forward(
     process_group,
@@ -13,6 +25,7 @@ def ring_flash_attn_forward(
     dropout_p=0,
     causal=True,
     window_size=(-1, -1),
+    softcap=0.0,
     alibi_slopes=None,
     deterministic=False,
 ):
@@ -37,6 +50,7 @@ def ring_flash_attn_forward(
                     "dropout_p": dropout_p,
                     "softmax_scale": softmax_scale,
                     "causal": causal and step == 0,
+                    "softcap": softcap,
                     "alibi_slopes": alibi_slopes,
                     "return_softmax": True and dropout_p > 0,
                 }
@@ -50,7 +64,7 @@ def ring_flash_attn_forward(
                         "window_size_right": window_size[1],
                     }
                 )
-            outputs = _flash_attn_forward(**params)
+            outputs = _wrapped_flash_attn_forward(**params)
             if len(outputs) == 8:
                 block_out, _, _, _, _, block_lse, _, _ = outputs
             else:
@@ -79,8 +93,10 @@ def ring_flash_attn_backward(
     dropout_p=0,
     causal=True,
     window_size=(-1, -1),
+    softcap=0.0,
     alibi_slopes=None,
     deterministic=False,
+    time_event=None,  # Sync GPU,CPU to lower vRAM allocation; no sync by default
 ):
     kv_comm = RingComm(process_group)
     d_kv_comm = RingComm(process_group)
@@ -97,6 +113,8 @@ def ring_flash_attn_backward(
     for step in range(kv_comm.world_size):
         if step + 1 != kv_comm.world_size:
             next_k, next_v = kv_comm.send_recv_kv(k, v)
+        elif time_event is not None:
+            time_event.record()
 
         if step <= kv_comm.rank or not causal:
             bwd_causal = causal and step == 0
@@ -115,6 +133,7 @@ def ring_flash_attn_backward(
                     "dropout_p": dropout_p,
                     "softmax_scale": softmax_scale,
                     "causal": bwd_causal,
+                    "softcap": softcap,
                     "alibi_slopes": alibi_slopes,
                     "deterministic": deterministic,
                 }
@@ -128,7 +147,8 @@ def ring_flash_attn_backward(
                         "window_size_right": window_size[1],
                     }
                 )
-            _flash_attn_backward(**params)
+            # logging.debug(f"q {params['q'].shape} k {params['k'].shape} v {params['v'].shape} dout {params['dout'].shape} softmax_lse {params['softmax_lse'].shape}")            
+            _wrapped_flash_attn_backward(**params)
 
             if dq is None:
                 dq = block_dq_buffer.to(torch.float32)

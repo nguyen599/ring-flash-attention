@@ -33,6 +33,7 @@ def ring_flash_attn_varlen_forward(
     dropout_p=0,
     causal=True,
     window_size=(-1, -1),
+    softcap=0.0,
     alibi_slopes=None,
     deterministic=False,
 ):
@@ -60,6 +61,7 @@ def ring_flash_attn_varlen_forward(
                     "dropout_p": dropout_p,
                     "softmax_scale": softmax_scale,
                     "causal": causal and step == 0,
+                    "softcap": softcap,
                     "alibi_slopes": alibi_slopes,
                     "return_softmax": True and dropout_p > 0,
                 }
@@ -114,6 +116,7 @@ def ring_flash_attn_varlen_backward(
     dropout_p=0,
     causal=True,
     window_size=(-1, -1),
+    softcap=0.0,
     alibi_slopes=None,
     deterministic=False,
 ):
@@ -134,6 +137,7 @@ def ring_flash_attn_varlen_backward(
 
         if step <= kv_comm.rank or not causal:
             bwd_causal = causal and step == 0
+
             params = get_default_args(_flash_attn_varlen_backward).copy()
             params.update(
                 {
@@ -153,6 +157,7 @@ def ring_flash_attn_varlen_backward(
                     "dropout_p": dropout_p,
                     "softmax_scale": softmax_scale,
                     "causal": bwd_causal,
+                    "softcap": softcap,
                     "alibi_slopes": alibi_slopes,
                     "deterministic": deterministic,
                 }

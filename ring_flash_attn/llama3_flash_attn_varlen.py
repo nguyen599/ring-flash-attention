@@ -4,6 +4,7 @@ from flash_attn.flash_attn_interface import (
     _flash_attn_varlen_forward,
     _flash_attn_varlen_backward,
 )
+import logging
 from .utils import get_default_args, AllGatherComm as Comm
 
 
@@ -75,6 +76,7 @@ def llama3_flash_attn_varlen_forward(
     dropout_p=0,
     causal=True,
     window_size=(-1, -1),
+    softcap=0.0,
     alibi_slopes=None,
     deterministic=False,
 ):
@@ -117,10 +119,10 @@ def llama3_flash_attn_varlen_forward(
         q_i = q[:, i * nheads // nheads_k : (i + heads_k_stride) * nheads // nheads_k]
         k_i = kv_buffer[0][local_k_slice]
         v_i = kv_buffer[1][local_k_slice]
+        # logging.debug(f"fwd i {i} k_ishape {k_i.shape} q.shape {q.shape} kv_buffer[0] {kv_buffer[0].shape} local_k_slice {local_k_slice}")     
 
-        params = get_default_args(_flash_attn_varlen_forward).copy()
-        params.update(
-            {
+        # params = get_default_args(_flash_attn_varlen_forward).copy()
+        params = {
                 "q": q_i,
                 "k": k_i,
                 "v": v_i,
@@ -131,10 +133,10 @@ def llama3_flash_attn_varlen_forward(
                 "dropout_p": dropout_p,
                 "softmax_scale": softmax_scale,
                 "causal": causal,
+                "softcap": softcap,
                 "alibi_slopes": alibi_slopes,
                 "return_softmax": True and dropout_p > 0,
-            }
-        )
+        }
         if "window_size" in params:
             params.update({"window_size": window_size})
         else:
@@ -165,7 +167,7 @@ def llama3_flash_attn_varlen_backward(
     k,
     v,
     out,
-    softmax_lse,
+    softmax_lse,  # (h, total)
     cu_seqlens_q,
     cu_seqlens_k,
     max_seqlen_q,
@@ -176,6 +178,7 @@ def llama3_flash_attn_varlen_backward(
     dropout_p=0,
     causal=True,
     window_size=(-1, -1),
+    softcap=0.0,
     alibi_slopes=None,
     deterministic=False,
 ):
@@ -246,10 +249,10 @@ def llama3_flash_attn_varlen_backward(
         v_i = kv_buffer[1][local_k_slice]
         dk_i = dkv_buffer[0][local_k_slice]
         dv_i = dkv_buffer[1][local_k_slice]
+        # logging.debug(f"bwd i {i} q_slice {q_slice} k_ishape {k_i.shape} dv_i.shape {dv_i.shape} q.shape {q.shape}")  
 
-        params = get_default_args(_flash_attn_varlen_backward).copy()
-        params.update(
-            {
+        # params = get_default_args(_flash_attn_varlen_backward).copy()
+        params = {
                 "dout": dout_i,
                 "q": q_i,
                 "k": k_i,
@@ -266,10 +269,10 @@ def llama3_flash_attn_varlen_backward(
                 "dropout_p": dropout_p,
                 "softmax_scale": softmax_scale,
                 "causal": causal,
+                "softcap": softcap,
                 "alibi_slopes": alibi_slopes,
                 "deterministic": deterministic,
             }
-        )
         if "window_size" in params:
             params.update({"window_size": window_size})
         else:
@@ -346,6 +349,7 @@ class Llama3FlashAttnVarlenFunc(torch.autograd.Function):
             deterministic=False,
         )
         # this should be out_padded
+        # logging.debug(f"q {q.view(-1, 2048, 8, 64)[0,:2,:3,:4]} out {out.view(-1, 2048, 8, 64)[0,:2,:3,:4]} softmax_lse {softmax_lse.view(8, -1, 2048)[0,:2,:4]}")     
         ctx.save_for_backward(q, k, v, out, softmax_lse, cu_seqlens_q, cu_seqlens_k)
         ctx.max_seqlen_q = max_seqlen_q
         ctx.max_seqlen_k = max_seqlen_k
